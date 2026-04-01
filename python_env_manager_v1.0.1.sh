@@ -11,6 +11,11 @@ USAGE:
   # 1) Install system deps + pyenv + uv and configure ~/.bashrc
   ./python_env_manager.sh --install-tools
 
+  # After --install-tools, open a new shell and use:
+  venvup            # activate nearest .venv (searches parent dirs)
+  venvdown          # deactivate (if active)
+  venvwhich         # show the python being used
+
   # 2) Create/update one project's pinned Python + .venv
   ./python_env_manager.sh --project /path/to/app --python 3.10.14
 
@@ -101,6 +106,41 @@ eval "$(pyenv init - bash)"
 '# >>> uv path >>>
 export PATH="$HOME/.local/bin:$PATH"
 # <<< uv path <<<'
+
+  # Add convenience functions for activating per-project .venv.
+  append_if_missing "${HOME}/.bashrc" "# >>> python venv helpers >>>" \
+'# >>> python venv helpers >>>
+# Activate the nearest ".venv" by searching current dir and parents.
+venvup() {
+  local dir="${PWD}"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/.venv/bin/activate" ]]; then
+      # shellcheck disable=SC1090
+      source "$dir/.venv/bin/activate"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo "No .venv found in this directory or parents." >&2
+  return 1
+}
+
+# Deactivate if a venv is active.
+venvdown() {
+  if declare -F deactivate >/dev/null 2>&1; then
+    deactivate
+  else
+    echo "No active virtual environment to deactivate." >&2
+    return 1
+  fi
+}
+
+# Show which Python is currently active.
+venvwhich() {
+  command -v python || true
+  python --version 2>/dev/null || true
+}
+# <<< python venv helpers <<<'
 
   echo "Installed tools. Open a new shell or run: source ~/.bashrc"
 }
