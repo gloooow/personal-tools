@@ -41,6 +41,18 @@ die() { echo "error: $*" >&2; exit 1; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"; }
 
+ensure_pyenv_in_current_shell() {
+  # Make pyenv available in this script process even if the user hasn't
+  # reloaded their shell rc yet (common on zsh/WSL).
+  export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
+  export PATH="$PYENV_ROOT/bin:$PATH"
+  if command -v pyenv >/dev/null 2>&1; then
+    # We're in bash, but pyenv init output is POSIX-y enough for our usage.
+    # shellcheck disable=SC1091
+    eval "$(pyenv init - bash)" >/dev/null 2>&1 || true
+  fi
+}
+
 append_if_missing() {
   local file="$1"
   local marker="$2"
@@ -81,7 +93,16 @@ install_tools() {
     curl -fsSL https://pyenv.run | bash
   fi
 
-  # Ensure pyenv is available for future shells.
+  [[ -x "${HOME}/.pyenv/bin/pyenv" ]] || die "pyenv install did not create ${HOME}/.pyenv/bin/pyenv"
+
+  # Ensure pyenv is available for future shells (bash + zsh).
+  local pyenv_rc_block
+  pyenv_rc_block='# >>> pyenv init >>>
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init - bash)"
+# <<< pyenv init <<<'
+
   append_if_missing "${HOME}/.bashrc" "# >>> pyenv init >>>" \
 '# >>> pyenv init >>>
 export PYENV_ROOT="$HOME/.pyenv"
@@ -89,13 +110,11 @@ export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init - bash)"
 # <<< pyenv init <<<'
 
+  # zsh doesn't source ~/.bashrc; configure ~/.zshrc too.
+  append_if_missing "${HOME}/.zshrc" "# >>> pyenv init >>>" "$pyenv_rc_block"
+
   # Make pyenv available in this shell too (if possible).
-  export PYENV_ROOT="${HOME}/.pyenv"
-  export PATH="${PYENV_ROOT}/bin:${PATH}"
-  if command -v pyenv >/dev/null 2>&1; then
-    # shellcheck disable=SC1091
-    eval "$(pyenv init - bash)" || true
-  fi
+  ensure_pyenv_in_current_shell
 
   if ! command -v uv >/dev/null 2>&1; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -103,6 +122,10 @@ eval "$(pyenv init - bash)"
 
   # Ensure uv is on PATH for future shells (uv installer typically does this, but be safe).
   append_if_missing "${HOME}/.bashrc" "# >>> uv path >>>" \
+'# >>> uv path >>>
+export PATH="$HOME/.local/bin:$PATH"
+# <<< uv path <<<'
+  append_if_missing "${HOME}/.zshrc" "# >>> uv path >>>" \
 '# >>> uv path >>>
 export PATH="$HOME/.local/bin:$PATH"
 # <<< uv path <<<'
@@ -142,6 +165,40 @@ venvwhich() {
 }
 # <<< python venv helpers <<<'
 
+  # zsh doesn't source ~/.bashrc; install helpers there too.
+  append_if_missing "${HOME}/.zshrc" "# >>> python venv helpers >>>" \
+'# >>> python venv helpers >>>
+# Activate the nearest ".venv" by searching current dir and parents.
+venvup() {
+  local dir="${PWD}"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/.venv/bin/activate" ]]; then
+      source "$dir/.venv/bin/activate"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo "No .venv found in this directory or parents." >&2
+  return 1
+}
+
+# Deactivate if a venv is active.
+venvdown() {
+  if declare -F deactivate >/dev/null 2>&1; then
+    deactivate
+  else
+    echo "No active virtual environment to deactivate." >&2
+    return 1
+  fi
+}
+
+# Show which Python is currently active.
+venvwhich() {
+  command -v python || true
+  python --version 2>/dev/null || true
+}
+# <<< python venv helpers <<<'
+
   echo "Installed tools. Open a new shell or run: source ~/.bashrc"
 }
 
@@ -155,7 +212,11 @@ create_project_env() {
   pushd "$project_dir" >/dev/null
 
   if ! command -v pyenv >/dev/null 2>&1; then
-    die "pyenv not found. Run: $0 --install-tools"
+    # If pyenv is installed but user's shell hasn't reloaded rc yet, load it now.
+    ensure_pyenv_in_current_shell
+  fi
+  if ! command -v pyenv >/dev/null 2>&1; then
+    die "pyenv not found. Run: $0 --install-tools (then restart your shell, or run: source ~/.zshrc)"
   fi
   if ! command -v uv >/dev/null 2>&1; then
     die "uv not found. Run: $0 --install-tools"
